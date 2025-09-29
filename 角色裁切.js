@@ -47,14 +47,13 @@
     return { ix, iy };
   }
 
-  async function loadSource(sourceType, sourceValue) {
+  async function loadSource(sourceType, sourceValue, util) {
     if (String(sourceType) === 'url') {
       return await loadImage(sourceValue);
     } else if (String(sourceType) === 'sprite') {
       const index = parseInt(sourceValue, 10);
-      const target = vm.runtime.targets[index];
-      if (!target) throw new Error('角色編號不存在: ' + sourceValue);
-      const costume = target.sprite.costumes_[target.currentCostume];
+      const costume = util.target.sprite.costumes_[index];
+      if (!costume) throw new Error('造型不存在: ' + sourceValue);
       return await costumeToImage(costume);
     } else {
       throw new Error('未知來源類型: ' + sourceType);
@@ -63,7 +62,7 @@
 
   class CBlur {
     constructor() {
-      this.cache = {}; // key -> skinId
+      this.cache = {}; // key -> {dataURL, w, h, r}
     }
 
     getInfo() {
@@ -164,7 +163,7 @@
           source_menu: {
             items: [
               { text: 'URL', value: 'url' },
-              { text: '角色編號', value: 'sprite' }
+              { text: '角色造型序號', value: 'sprite' }
             ]
           }
         }
@@ -185,49 +184,49 @@
       if (blur > 0) ctx.filter = `blur(${blur}px)`;
       ctx.drawImage(img, sx - pad, sy - pad, sw + pad * 2, sh + pad * 2, 0, 0, sw + pad * 2, sh + pad * 2);
 
-      // 再裁切回原來大小
       const cropped = document.createElement('canvas');
       cropped.width = sw;
       cropped.height = sh;
       const cctx = cropped.getContext('2d');
       cctx.drawImage(canvas, pad, pad, sw, sh, 0, 0, sw, sh);
 
-      const dataURL = cropped.toDataURL('image/png');
-      const svg = svgCreateImageWrapperDataURL(dataURL, sw, sh, { x: 0, y: 0, w: sw, h: sh }, r);
-      return renderer.createSVGSkin(svg, [sw / 2, sh / 2]);
+      return cropped.toDataURL('image/png');
     }
 
     async cropUrlCmd(args, util) {
       const key = this._makeKey(args.SOURCE_TYPE, args.SOURCE_VALUE, args);
       const useCache = (String(args.CACHE) === 'yes');
 
-      if (useCache && this.cache[key]) {
-        renderer.updateDrawableSkinId(util.target.drawableID, this.cache[key]);
-        runtime.requestRedraw();
-        return;
-      }
-
       try {
-        const img = await loadSource(args.SOURCE_TYPE, args.SOURCE_VALUE);
-        let x = toNum(args.X), y = toNum(args.Y);
-        let w = toNum(args.W), h = toNum(args.H);
-        let r = toNum(args.R), blur = toNum(args.BLUR);
+        let cacheData;
+        if (useCache && this.cache[key]) {
+          cacheData = this.cache[key];
+        } else {
+          const img = await loadSource(args.SOURCE_TYPE, args.SOURCE_VALUE, util);
+          let x = toNum(args.X), y = toNum(args.Y);
+          let w = toNum(args.W), h = toNum(args.H);
+          let r = toNum(args.R), blur = toNum(args.BLUR);
 
-        if (args.UNIT === '%') {
-          x = img.width * (x / 100);
-          y = img.height * (y / 100);
-          w = img.width * (w / 100);
-          h = img.height * (h / 100);
-          r = Math.min(w, h) * (r / 100);
-        } else if (args.UNIT === 'scratch') {
-          x = img.width * (x / 480);
-          y = img.height * (y / 360);
-          w = img.width * (w / 480);
-          h = img.height * (h / 360);
+          if (args.UNIT === '%') {
+            x = img.width * (x / 100);
+            y = img.height * (y / 100);
+            w = img.width * (w / 100);
+            h = img.height * (h / 100);
+            r = Math.min(w, h) * (r / 100);
+          } else if (args.UNIT === 'scratch') {
+            x = img.width * (x / 480);
+            y = img.height * (y / 360);
+            w = img.width * (w / 480);
+            h = img.height * (h / 360);
+          }
+
+          const dataURL = await this._generateSkin(img, x, y, w, h, r, blur);
+          cacheData = { dataURL, w, h, r };
+          if (useCache) this.cache[key] = cacheData;
         }
 
-        const skinId = await this._generateSkin(img, x, y, w, h, r, blur);
-        if (useCache) this.cache[key] = skinId;
+        const svg = svgCreateImageWrapperDataURL(cacheData.dataURL, cacheData.w, cacheData.h, { x: 0, y: 0, w: cacheData.w, h: cacheData.h }, cacheData.r);
+        const skinId = renderer.createSVGSkin(svg, [cacheData.w / 2, cacheData.h / 2]);
 
         renderer.updateDrawableSkinId(util.target.drawableID, skinId);
         runtime.requestRedraw();
@@ -240,86 +239,35 @@
       const key = this._makeKey(args.SOURCE_TYPE, args.SOURCE_VALUE, args);
       const useCache = (String(args.CACHE) === 'yes');
 
-      if (useCache && this.cache[key]) {
-        renderer.updateDrawableSkinId(util.target.drawableID, this.cache[key]);
-        runtime.requestRedraw();
-        return;
-      }
-
       try {
-        const img = await loadSource(args.SOURCE_TYPE, args.SOURCE_VALUE);
-        const p1 = scratchXYtoImageXY(toNum(args.X1), toNum(args.Y1), img.width, img.height);
-        const p2 = scratchXYtoImageXY(toNum(args.X2), toNum(args.Y2), img.width, img.height);
+        let cacheData;
+        if (useCache && this.cache[key]) {
+          cacheData = this.cache[key];
+        } else {
+          const img = await loadSource(args.SOURCE_TYPE, args.SOURCE_VALUE, util);
+          const p1 = scratchXYtoImageXY(toNum(args.X1), toNum(args.Y1), img.width, img.height);
+          const p2 = scratchXYtoImageXY(toNum(args.X2), toNum(args.Y2), img.width, img.height);
 
-        const sx = Math.min(p1.ix, p2.ix);
-        const sy = Math.min(p1.iy, p2.iy);
-        const sw = Math.abs(p2.ix - p1.ix);
-        const sh = Math.abs(p2.iy - p1.iy);
+          const sx = Math.min(p1.ix, p2.ix);
+          const sy = Math.min(p1.iy, p2.iy);
+          const sw = Math.abs(p2.ix - p1.ix);
+          const sh = Math.abs(p2.iy - p1.iy);
 
-        const r = Math.max(0, toNum(args.R));
-        const blur = Math.max(0, toNum(args.BLUR));
+          const r = Math.max(0, toNum(args.R));
+          const blur = Math.max(0, toNum(args.BLUR));
 
-        const skinId = await this._generateSkin(img, sx, sy, sw, sh, r, blur);
-        if (useCache) this.cache[key] = skinId;
+          const dataURL = await this._generateSkin(img, sx, sy, sw, sh, r, blur);
+          cacheData = { dataURL, w: sw, h: sh, r };
+          if (useCache) this.cache[key] = cacheData;
+        }
+
+        const svg = svgCreateImageWrapperDataURL(cacheData.dataURL, cacheData.w, cacheData.h, { x: 0, y: 0, w: cacheData.w, h: cacheData.h }, cacheData.r);
+        const skinId = renderer.createSVGSkin(svg, [cacheData.w / 2, cacheData.h / 2]);
 
         renderer.updateDrawableSkinId(util.target.drawableID, skinId);
         runtime.requestRedraw();
       } catch (e) {
         console.error('裁切XY→XY失敗：', e);
-      }
-    }
-
-    async preloadUrl(args, util) {
-      const key = this._makeKey(args.SOURCE_TYPE, args.SOURCE_VALUE, args);
-      if (this.cache[key]) return;
-
-      try {
-        const img = await loadSource(args.SOURCE_TYPE, args.SOURCE_VALUE);
-        let x = toNum(args.X), y = toNum(args.Y);
-        let w = toNum(args.W), h = toNum(args.H);
-        let r = toNum(args.R), blur = toNum(args.BLUR);
-
-        if (args.UNIT === '%') {
-          x = img.width * (x / 100);
-          y = img.height * (y / 100);
-          w = img.width * (w / 100);
-          h = img.height * (h / 100);
-          r = Math.min(w, h) * (r / 100);
-        } else if (args.UNIT === 'scratch') {
-          x = img.width * (x / 480);
-          y = img.height * (y / 360);
-          w = img.width * (w / 480);
-          h = img.height * (h / 360);
-        }
-
-        const skinId = await this._generateSkin(img, x, y, w, h, r, blur);
-        this.cache[key] = skinId;
-      } catch (e) {
-        console.error('預生成失敗：', e);
-      }
-    }
-
-    async preloadUrlXYXY(args, util) {
-      const key = this._makeKey(args.SOURCE_TYPE, args.SOURCE_VALUE, args);
-      if (this.cache[key]) return;
-
-      try {
-        const img = await loadSource(args.SOURCE_TYPE, args.SOURCE_VALUE);
-        const p1 = scratchXYtoImageXY(toNum(args.X1), toNum(args.Y1), img.width, img.height);
-        const p2 = scratchXYtoImageXY(toNum(args.X2), toNum(args.Y2), img.width, img.height);
-
-        const sx = Math.min(p1.ix, p2.ix);
-        const sy = Math.min(p1.iy, p2.iy);
-        const sw = Math.abs(p2.ix - p1.ix);
-        const sh = Math.abs(p2.iy - p1.iy);
-
-        const r = Math.max(0, toNum(args.R));
-        const blur = Math.max(0, toNum(args.BLUR));
-
-        const skinId = await this._generateSkin(img, sx, sy, sw, sh, r, blur);
-        this.cache[key] = skinId;
-      } catch (e) {
-        console.error('預生成XY→XY失敗：', e);
       }
     }
 
