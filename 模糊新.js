@@ -62,7 +62,7 @@
         }
         getInfo() {
             return {
-                id: 'kmsBlur',
+                id: 'kmsBlurV2',
                 name: translate('kmsBlur'),
                 color1:'#668cff',
                 color2:'#3d6dff',
@@ -303,4 +303,5 @@
         }
     }
     sc.extensions.register(new temp())
+
 })(Scratch)
