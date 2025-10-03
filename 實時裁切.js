@@ -51,19 +51,19 @@
 
   class CBlur {
     constructor() {
-      this.cache = {}; // key -> {canvas, w, h, r}
+      this.cache = {};
     }
 
     getInfo() {
       return {
         id: 'cblur',
-        name: '裁切模糊 (GPU快取版)',
+        name: '裁切 (無模糊)',
         color1: '#ffa74a',
         blocks: [
           {
             opcode: 'cropUrlCmd',
             blockType: Scratch.BlockType.COMMAND,
-            text: '裁切 [SOURCE_TYPE] [SOURCE_VALUE] x [X] y [Y] 長 [W] 寬 [H] 圓角 [R] 單位 [UNIT] 模糊 [BLUR] 倍率 [SCALE] 快取 [CACHE]',
+            text: '裁切 [SOURCE_TYPE] [SOURCE_VALUE] x [X] y [Y] 長 [W] 寬 [H] 圓角 [R] 單位 [UNIT] 倍率 [SCALE] 快取 [CACHE]',
             arguments: {
               SOURCE_TYPE: { type: Scratch.ArgumentType.STRING, menu: 'source_menu', defaultValue: 'url' },
               SOURCE_VALUE: { type: Scratch.ArgumentType.STRING, defaultValue: 'https://extensions.turbowarp.org/dango.png' },
@@ -73,7 +73,6 @@
               H: { type: Scratch.ArgumentType.NUMBER, defaultValue: 100 },
               R: { type: Scratch.ArgumentType.NUMBER, defaultValue: 0 },
               UNIT: { type: Scratch.ArgumentType.STRING, menu: 'units', defaultValue: '%' },
-              BLUR: { type: Scratch.ArgumentType.NUMBER, defaultValue: 0 },
               SCALE: { type: Scratch.ArgumentType.NUMBER, defaultValue: 1 },
               CACHE: { type: Scratch.ArgumentType.STRING, menu: 'cache_menu', defaultValue: 'yes' }
             }
@@ -81,7 +80,7 @@
           {
             opcode: 'cropUrlXYXY',
             blockType: Scratch.BlockType.COMMAND,
-            text: '裁切 [SOURCE_TYPE] [SOURCE_VALUE] XY [X1] [Y1] 到 XY [X2] [Y2] 圓角 [R] 模糊 [BLUR] 倍率 [SCALE] 快取 [CACHE]',
+            text: '裁切 [SOURCE_TYPE] [SOURCE_VALUE] XY [X1] [Y1] 到 XY [X2] [Y2] 圓角 [R] 倍率 [SCALE] 快取 [CACHE]',
             arguments: {
               SOURCE_TYPE: { type: Scratch.ArgumentType.STRING, menu: 'source_menu', defaultValue: 'url' },
               SOURCE_VALUE: { type: Scratch.ArgumentType.STRING, defaultValue: 'https://extensions.turbowarp.org/dango.png' },
@@ -90,7 +89,6 @@
               X2: { type: Scratch.ArgumentType.NUMBER, defaultValue: 100 },
               Y2: { type: Scratch.ArgumentType.NUMBER, defaultValue: -100 },
               R: { type: Scratch.ArgumentType.NUMBER, defaultValue: 0 },
-              BLUR: { type: Scratch.ArgumentType.NUMBER, defaultValue: 0 },
               SCALE: { type: Scratch.ArgumentType.NUMBER, defaultValue: 1 },
               CACHE: { type: Scratch.ArgumentType.STRING, menu: 'cache_menu', defaultValue: 'yes' }
             }
@@ -127,15 +125,13 @@
     }
 
     _makeKey(sourceType, sourceValue, args) {
-      return JSON.stringify([sourceType, sourceValue, args.X, args.Y, args.W, args.H, args.X1, args.Y1, args.X2, args.Y2, args.R, args.UNIT, args.BLUR, args.SCALE]);
+      return JSON.stringify([sourceType, sourceValue, args.X, args.Y, args.W, args.H, args.X1, args.Y1, args.X2, args.Y2, args.R, args.UNIT, args.SCALE]);
     }
 
-    // 修正版 _generateSkin
-    async _generateSkin(img, sx, sy, sw, sh, r, blur, scale) {
-      const pad = blur * 2;
+    async _generateSkin(img, sx, sy, sw, sh, r, scale) {
       const canvas = document.createElement('canvas');
-      canvas.width = (sw + pad * 2) * scale;
-      canvas.height = (sh + pad * 2) * scale;
+      canvas.width = sw * scale;
+      canvas.height = sh * scale;
       const ctx = canvas.getContext('2d');
 
       // 圓角裁切
@@ -160,12 +156,10 @@
       ctx.closePath();
       ctx.clip();
 
-      // 模糊 & 繪製
-      if (blur > 0) ctx.filter = `blur(${blur * scale}px)`;
       ctx.drawImage(
         img,
-        sx - pad, sy - pad, sw + pad * 2, sh + pad * 2,
-        0, 0, (sw + pad * 2) * scale, (sh + pad * 2) * scale
+        sx, sy, sw, sh,
+        0, 0, w, h
       );
 
       return { canvas, w, h, r };
@@ -183,7 +177,7 @@
           const img = await loadSource(args.SOURCE_TYPE, args.SOURCE_VALUE, util);
           let x = toNum(args.X), y = toNum(args.Y);
           let w = toNum(args.W), h = toNum(args.H);
-          let r = toNum(args.R), blur = toNum(args.BLUR), scale = Math.max(1, toNum(args.SCALE));
+          let r = toNum(args.R), scale = Math.max(1, toNum(args.SCALE));
 
           if (args.UNIT === '%') {
             x = img.width * (x / 100);
@@ -198,7 +192,7 @@
             h = img.height * (h / 360);
           }
 
-          cacheData = await this._generateSkin(img, x, y, w, h, r, blur, scale);
+          cacheData = await this._generateSkin(img, x, y, w, h, r, scale);
           if (useCache) this.cache[key] = cacheData;
         }
 
@@ -230,10 +224,9 @@
           const sh = Math.abs(p2.iy - p1.iy);
 
           const r = Math.max(0, toNum(args.R));
-          const blur = Math.max(0, toNum(args.BLUR));
           const scale = Math.max(1, toNum(args.SCALE));
 
-          cacheData = await this._generateSkin(img, sx, sy, sw, sh, r, blur, scale);
+          cacheData = await this._generateSkin(img, sx, sy, sw, sh, r, scale);
           if (useCache) this.cache[key] = cacheData;
         }
 
