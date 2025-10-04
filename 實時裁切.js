@@ -40,9 +40,10 @@
     if (String(sourceType) === 'url') {
       return await loadImage(sourceValue);
     } else if (String(sourceType) === 'sprite') {
-      const index = parseInt(sourceValue, 10);
+      // 修正造型序號（人類輸入 1 對應陣列索引 0）
+      const index = parseInt(sourceValue, 10) - 1;
       const costume = util.target.sprite.costumes_[index];
-      if (!costume) throw new Error('造型不存在: ' + sourceValue);
+      if (!costume || index < 0) throw new Error('造型不存在: ' + sourceValue);
       return await costumeToImage(costume);
     } else {
       throw new Error('未知來源類型: ' + sourceType);
@@ -52,12 +53,13 @@
   class CBlur {
     constructor() {
       this.cache = {};
+      this._skinId = null; // 重用 skin 避免 GPU 負擔
     }
 
     getInfo() {
       return {
-        id: 'cblur',
-        name: '裁切 (無模糊)',
+        id: 'Cut',
+        name: '裁切',
         color1: '#ffa74a',
         blocks: [
           {
@@ -73,8 +75,8 @@
               H: { type: Scratch.ArgumentType.NUMBER, defaultValue: 100 },
               R: { type: Scratch.ArgumentType.NUMBER, defaultValue: 0 },
               UNIT: { type: Scratch.ArgumentType.STRING, menu: 'units', defaultValue: '%' },
-              SCALE: { type: Scratch.ArgumentType.NUMBER, defaultValue: 1 },
-              CACHE: { type: Scratch.ArgumentType.STRING, menu: 'cache_menu', defaultValue: 'yes' }
+              SCALE: { type: Scratch.ArgumentType.NUMBER, defaultValue: 2 },
+              CACHE: { type: Scratch.ArgumentType.STRING, menu: 'cache_menu', defaultValue: 'no' }
             }
           },
           {
@@ -85,18 +87,18 @@
               SOURCE_TYPE: { type: Scratch.ArgumentType.STRING, menu: 'source_menu', defaultValue: 'url' },
               SOURCE_VALUE: { type: Scratch.ArgumentType.STRING, defaultValue: 'https://extensions.turbowarp.org/dango.png' },
               X1: { type: Scratch.ArgumentType.NUMBER, defaultValue: -100 },
-              Y1: { type: Scratch.ArgumentType.NUMBER, defaultValue: 100 },
+              Y1: { type: Scratch.ArgumentType.NUMBER, defaultValue: -100 },
               X2: { type: Scratch.ArgumentType.NUMBER, defaultValue: 100 },
-              Y2: { type: Scratch.ArgumentType.NUMBER, defaultValue: -100 },
+              Y2: { type: Scratch.ArgumentType.NUMBER, defaultValue: 100 },
               R: { type: Scratch.ArgumentType.NUMBER, defaultValue: 0 },
-              SCALE: { type: Scratch.ArgumentType.NUMBER, defaultValue: 1 },
-              CACHE: { type: Scratch.ArgumentType.STRING, menu: 'cache_menu', defaultValue: 'yes' }
+              SCALE: { type: Scratch.ArgumentType.NUMBER, defaultValue: 2 },
+              CACHE: { type: Scratch.ArgumentType.STRING, menu: 'cache_menu', defaultValue: 'no' }
             }
           },
           {
             opcode: 'restore',
             blockType: Scratch.BlockType.COMMAND,
-            text: '恢復為原本的造型'
+            text: '恢復造型'
           }
         ],
         menus: {
@@ -117,7 +119,7 @@
           source_menu: {
             items: [
               { text: 'URL', value: 'url' },
-              { text: '角色造型序號', value: 'sprite' }
+              { text: '造型編號', value: 'sprite' }
             ]
           }
         }
@@ -129,16 +131,30 @@
     }
 
     async _generateSkin(img, sx, sy, sw, sh, r, scale) {
+      const MAX_SIZE = 4096;
+      const safe = (n) => Math.max(1, Math.min(Math.round(n), MAX_SIZE));
+
+      let w = safe(sw * scale);
+      let h = safe(sh * scale);
       const canvas = document.createElement('canvas');
-      canvas.width = sw * scale;
-      canvas.height = sh * scale;
-      const ctx = canvas.getContext('2d');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d', { willReadFrequently: false });
+
+      ctx.filter = 'none';
+      ctx.imageSmoothingEnabled = true;
+
+      // 防止過大畫布導致崩潰
+      if (sw * scale > MAX_SIZE || sh * scale > MAX_SIZE) {
+        const ratio = MAX_SIZE / Math.max(sw * scale, sh * scale);
+        sw *= ratio;
+        sh *= ratio;
+        w = sw * scale;
+        h = sh * scale;
+      }
 
       // 圓角裁切
-      const w = sw * scale;
-      const h = sh * scale;
       const rr = Math.min(r * scale, w / 2, h / 2);
-
       ctx.beginPath();
       if (rr > 0) {
         ctx.moveTo(rr, 0);
@@ -156,11 +172,11 @@
       ctx.closePath();
       ctx.clip();
 
-      ctx.drawImage(
-        img,
-        sx, sy, sw, sh,
-        0, 0, w, h
-      );
+      if (img && img.width && img.height) {
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
+      } else {
+        console.warn('圖片無效');
+      }
 
       return { canvas, w, h, r };
     }
@@ -196,9 +212,11 @@
           if (useCache) this.cache[key] = cacheData;
         }
 
-        const skinId = renderer.createBitmapSkin([cacheData.w, cacheData.h]);
-        renderer.updateBitmapSkin(skinId, cacheData.canvas, false);
-        renderer.updateDrawableSkinId(util.target.drawableID, skinId);
+        if (!this._skinId) {
+          this._skinId = renderer.createBitmapSkin([cacheData.w, cacheData.h]);
+        }
+        renderer.updateBitmapSkin(this._skinId, cacheData.canvas, false);
+        renderer.updateDrawableSkinId(util.target.drawableID, this._skinId);
         runtime.requestRedraw();
       } catch (e) {
         console.error('裁切失敗：', e);
@@ -230,9 +248,11 @@
           if (useCache) this.cache[key] = cacheData;
         }
 
-        const skinId = renderer.createBitmapSkin([cacheData.w, cacheData.h]);
-        renderer.updateBitmapSkin(skinId, cacheData.canvas, false);
-        renderer.updateDrawableSkinId(util.target.drawableID, skinId);
+        if (!this._skinId) {
+          this._skinId = renderer.createBitmapSkin([cacheData.w, cacheData.h]);
+        }
+        renderer.updateBitmapSkin(this._skinId, cacheData.canvas, false);
+        renderer.updateDrawableSkinId(util.target.drawableID, this._skinId);
         runtime.requestRedraw();
       } catch (e) {
         console.error('裁切XY→XY失敗：', e);
